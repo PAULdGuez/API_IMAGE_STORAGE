@@ -21,6 +21,10 @@ app.add_middleware(
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+# Security: Allowed file extensions and max file size
+ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.doc', '.docx', '.xlsx', '.xls', '.txt', '.csv'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
 # Connection Manager for WebSockets
 class ConnectionManager:
     def __init__(self):
@@ -58,6 +62,25 @@ async def websocket_endpoint(websocket: WebSocket):
 async def upload_file(file: UploadFile = File(...), user_id: str = Form(...)):
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id is required")
+    
+    # Security: Validate file extension
+    file_ext = Path(file.filename).suffix.lower() if file.filename else ''
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Tipo de archivo no permitido. Extensiones válidas: {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+    
+    # Security: Check file size
+    file.file.seek(0, 2)  # Move to end of file
+    file_size = file.file.tell()
+    file.file.seek(0)  # Reset to beginning
+    
+    if file_size > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413, 
+            detail=f"Archivo muy grande. Tamaño máximo: {MAX_FILE_SIZE // (1024*1024)}MB"
+        )
     
     user_dir = UPLOAD_DIR / user_id
     user_dir.mkdir(exist_ok=True)
@@ -116,7 +139,12 @@ def list_user_files(user_id: str):
 
 @app.get("/files/{user_id}/{filename}")
 def get_file(user_id: str, filename: str):
-    file_path = UPLOAD_DIR / user_id / filename
+    file_path = (UPLOAD_DIR / user_id / filename).resolve()
+    
+    # Security: Prevent path traversal attacks
+    if not str(file_path).startswith(str(UPLOAD_DIR.resolve())):
+        raise HTTPException(status_code=403, detail="Acceso denegado")
+    
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path)
